@@ -1,0 +1,4 @@
+rea/captures/
+__pycache__/
+*.reference.png
+*.cutout.png
