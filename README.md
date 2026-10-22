@@ -78,5 +78,6 @@
 | `pipeline/text_to_3d.py` | Free local text → image (FLUX.1-schnell, Apache-2.0) → 3D (Hunyuan3D-2) pipeline, with cleanup and decimation to a face budget (default 4000 for Roblox). **Written against the upstream APIs but not run here (no GPU in this environment).** |
 | `llm_modeling/crown.py` | Claude-written procedural 3D model → `crown.glb` + `crown_preview.png` (`pip install trimesh matplotlib`) |
 | `rea/capture_customuse.sh` | REA passive capture of customuse.com (page, JS bundle endpoints, live session while you press Generate) |
+| [`combat-vfx/`](combat-vfx/) | Reverse engineering of the [hun0fx Stylized Combat VFX web demo](https://hun0fx.itch.io/combat-vfx-demo): [how it works](combat-vfx/ANALYSIS.md) (architecture, dissolve shader, layer timings, game feel) plus an original three.js VFX library and playground built from those findings |
 
 Hunyuan3D is under the Tencent Hunyuan 3D Community License. If you're in the EU, UK or South Korea, use TRELLIS.2 or TripoSG for the image-to-3D step instead.

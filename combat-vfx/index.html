@@ -1,0 +1,279 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Combat VFX Playground</title>
+<style>
+  :root { --bg: #0d0e11; --panel: rgba(20, 22, 27, 0.88); --line: #2b2f37; --fg: #ece9e3; --muted: #9096a0; --el: #ff8a3d; }
+  * { box-sizing: border-box; }
+  html, body { margin: 0; height: 100%; background: var(--bg); color: var(--fg); font: 14px/1.45 system-ui, -apple-system, "Segoe UI", sans-serif; overflow: hidden; }
+  canvas { display: block; width: 100vw; height: 100vh; }
+  .hud { position: fixed; left: 16px; top: 14px; pointer-events: none; max-width: calc(100vw - 32px); }
+  .hud h1 { margin: 0 0 4px; font-size: 17px; letter-spacing: .02em; }
+  .hud p { margin: 0; color: var(--muted); font-size: 13px; }
+  .hud kbd { font: 12px ui-monospace, Menlo, monospace; color: var(--fg); background: #22252c; border: 1px solid var(--line); border-radius: 4px; padding: 0 4px; }
+  .stats { margin-top: 8px; font: 13px ui-monospace, Menlo, monospace; color: var(--fg); }
+  .bar { width: 180px; height: 6px; background: #2a2d34; border-radius: 3px; margin-top: 4px; overflow: hidden; }
+  .bar i { display: block; height: 100%; background: var(--el); width: 100%; transition: width .1s; }
+  .panel { position: fixed; right: 16px; top: 14px; width: 248px; background: var(--panel); border: 1px solid var(--line); border-radius: 12px; padding: 12px; backdrop-filter: blur(6px); }
+  .panel h2 { margin: 0 0 6px; font-size: 12px; text-transform: uppercase; letter-spacing: .08em; color: var(--muted); }
+  .panel section + section { margin-top: 12px; }
+  .row { display: flex; flex-wrap: wrap; gap: 5px; }
+  button { font: inherit; font-size: 13px; color: var(--fg); background: #22252c; border: 1px solid var(--line); border-radius: 8px; padding: 4px 9px; cursor: pointer; }
+  button:hover { border-color: #444a55; }
+  button[aria-pressed="true"] { background: var(--fg); color: var(--bg); }
+  button i { display: inline-block; width: 9px; height: 9px; border-radius: 50%; margin-right: 5px; }
+  label { display: flex; align-items: center; justify-content: space-between; gap: 8px; color: var(--muted); font-size: 13px; }
+  input[type="range"] { width: 120px; }
+  .banner { position: fixed; left: 50%; top: 22%; transform: translateX(-50%); font-size: 28px; font-weight: 700; opacity: 0; transition: opacity .25s; pointer-events: none; text-shadow: 0 2px 12px #000; }
+  .banner.on { opacity: 1; }
+  #err { position: fixed; left: 16px; bottom: 16px; color: #ff8080; font: 12px ui-monospace, monospace; white-space: pre-wrap; }
+  @media (max-width: 720px) {
+    .panel { top: auto; bottom: 12px; right: 12px; left: 12px; width: auto; max-height: 42vh; overflow: auto; }
+    .hud p.keys { display: none; }
+  }
+</style>
+<script type="importmap">{ "imports": {
+  "three": "https://cdn.jsdelivr.net/npm/three@0.169.0/build/three.module.js",
+  "three/addons/": "https://cdn.jsdelivr.net/npm/three@0.169.0/examples/jsm/"
+} }</script>
+</head>
+<body>
+<canvas id="c"></canvas>
+<div class="hud">
+  <h1>Combat VFX Playground</h1>
+  <p class="keys"><kbd>WASD</kbd> move · <kbd>Click</kbd>/<kbd>J</kbd> swing · <kbd>E</kbd> thunder · <kbd>F</kbd> hammer · <kbd>Shift</kbd> dash · <kbd>G</kbd> shield · <kbd>Q</kbd> aura · <kbd>1–6</kbd> element · <kbd>Wheel</kbd> zoom</p>
+  <div class="stats">Wave <span id="wave">0</span> · Score <span id="score">0</span> · Left <span id="left">0</span><div class="bar"><i id="hp"></i></div></div>
+</div>
+<div class="panel">
+  <section><h2>Element</h2><div class="row" id="els"></div></section>
+  <section><h2>Preview effect</h2><div class="row" id="fxs"></div></section>
+  <section>
+    <h2>Feel</h2>
+    <label>Time scale <input id="tempo" type="range" min="0.1" max="1.5" step="0.05" value="1"></label>
+    <label>Hit-stop <input id="hitstop" type="checkbox" checked></label>
+    <label>Camera shake <input id="shake" type="checkbox" checked></label>
+    <label>Bloom <input id="bloom" type="checkbox" checked></label>
+    <label>Enemies <input id="enemies" type="checkbox" checked></label>
+  </section>
+</div>
+<div class="banner" id="banner"></div>
+<div id="err"></div>
+<script type="module">
+import * as THREE from 'three';
+import { VFX, ELEMENTS, ELEMENT_NAMES, RECIPE_NAMES, RECIPES, CameraShake, HitStop, HitFlash, createPost } from './src/index.js';
+
+const $ = (id) => document.getElementById(id);
+addEventListener('error', (e) => { $('err').textContent += (e.message || e) + '\n'; });
+addEventListener('unhandledrejection', (e) => { $('err').textContent += String(e.reason) + '\n'; });
+const cap = (s) => s[0].toUpperCase() + s.slice(1);
+
+// ---------- stage ----------
+const canvas = $('c');
+const renderer = new THREE.WebGLRenderer({ canvas, antialias: true, powerPreference: 'high-performance' });
+renderer.setPixelRatio(Math.min(2, devicePixelRatio));
+const scene = new THREE.Scene();
+scene.background = new THREE.Color(0x0e0f13);
+scene.fog = new THREE.Fog(0x0e0f13, 30, 80);
+const camera = new THREE.PerspectiveCamera(45, 1, 0.1, 300);
+scene.add(new THREE.HemisphereLight(0x9aa3b5, 0x1a1b1f, 1.1));
+const sun = new THREE.DirectionalLight(0xfff4e6, 1.4); sun.position.set(-4, 8, -3); scene.add(sun);
+const floor = new THREE.Mesh(new THREE.PlaneGeometry(200, 200), new THREE.MeshStandardMaterial({ color: 0x1b1d22, roughness: 1 }));
+floor.rotation.x = -Math.PI / 2; scene.add(floor);
+const grid = new THREE.GridHelper(80, 80, 0x2a2d34, 0x1e2026); grid.position.y = 0.002; scene.add(grid);
+const ARENA = 15;
+const ring = new THREE.Mesh(new THREE.RingGeometry(ARENA - 0.06, ARENA + 0.06, 128), new THREE.MeshBasicMaterial({ color: 0x3a3f48 }));
+ring.rotation.x = -Math.PI / 2; ring.position.y = 0.01; scene.add(ring);
+const post = createPost(renderer, scene, camera);
+function resize() {
+  const w = innerWidth, h = innerHeight;
+  renderer.setSize(w, h, false); post.setSize(w, h);
+  camera.aspect = w / h; camera.fov = camera.aspect < 1 ? 62 : 45; camera.updateProjectionMatrix();
+}
+addEventListener('resize', resize); resize();
+
+function capsule(body, face) {
+  const g = new THREE.Group();
+  const mat = new THREE.MeshStandardMaterial({ color: body, roughness: 0.6 });
+  const m = new THREE.Mesh(new THREE.CapsuleGeometry(0.35, 1.0, 6, 16), mat); m.position.y = 0.85; g.add(m);
+  const f = new THREE.Mesh(new THREE.BoxGeometry(0.34, 0.12, 0.12), new THREE.MeshStandardMaterial({ color: face, emissive: face, emissiveIntensity: 0.4 }));
+  f.position.set(0, 1.35, 0.3); g.add(f);
+  scene.add(g);
+  return { g, mat, flash: new HitFlash(mat) };
+}
+
+// ---------- state ----------
+const vfx = new VFX(scene);
+const shake = new CameraShake(), stop = new HitStop();
+const hero = capsule(0x5a5d64, 0xff8a3d);
+const aimMark = new THREE.Mesh(new THREE.RingGeometry(0.35, 0.45, 32), new THREE.MeshBasicMaterial({ color: 0xff8a3d, transparent: true, opacity: 0.7 }));
+aimMark.rotation.x = -Math.PI / 2; aimMark.position.y = 0.02; scene.add(aimMark);
+let element = 'fire', hp = 100, wave = 0, score = 0, time = 0, tempo = 1, swingFlip = false, dash = null, rooted = 0;
+const enemies = [], timers = [], keys = new Set();
+const cds = { j: 0, e: 0, f: 0, shift: 0, g: 0, q: 0 };
+const CD = { j: 0.32, e: 2.2, f: 6, shift: 0.9, g: 0.5, q: 0.5 };
+const aim = new THREE.Vector3(0, 0, 5), mouse = new THREE.Vector2(), ray = new THREE.Raycaster(), ground = new THREE.Plane(new THREE.Vector3(0, 1, 0), 0);
+let shieldFx = null, auraFx = null;
+
+const after = (s, fn) => timers.push({ at: time + s, fn });
+const fwd = () => { const d = aim.clone().sub(hero.g.position).setY(0); return d.lengthSq() < 1e-4 ? new THREE.Vector3(0, 0, 1) : d.normalize(); };
+const face = () => { const d = fwd(); hero.g.rotation.y = Math.atan2(d.x, d.z); return d; };
+const chest = (o) => o.position.clone().setY(1.1);
+const alive = () => enemies.filter((e) => !e.dead);
+function banner(t) { $('banner').textContent = t; $('banner').classList.add('on'); clearTimeout(banner.t); banner.t = setTimeout(() => $('banner').classList.remove('on'), 1400); }
+
+// ---------- enemies ----------
+function spawnWave() {
+  wave++; $('wave').textContent = wave;
+  for (let i = 0; i < 3 + wave * 2; i++) {
+    const a = Math.random() * Math.PI * 2, r = ARENA - 1 - Math.random() * 2;
+    const e = capsule(0x6b3434, 0x2a2c31);
+    e.g.position.set(Math.cos(a) * r, 0, Math.sin(a) * r);
+    Object.assign(e, { hp: 2 + Math.floor(wave / 2), speed: 1.4 + wave * 0.12 + Math.random() * 0.4, kb: new THREE.Vector3(), dead: 0 });
+    enemies.push(e);
+  }
+  banner(`Wave ${wave}`);
+}
+function damage(e, n, from) {
+  if (e.dead) return;
+  e.hp -= n; e.flash.trigger();
+  const away = e.g.position.clone().sub(from).setY(0);
+  if (away.lengthSq() > 1e-4) e.kb.add(away.normalize().multiplyScalar(5 + n));
+  vfx.play('hit', { position: chest(e.g), direction: away });
+  if (e.hp <= 0) { e.dead = time; score += 10 * wave; $('score').textContent = score; vfx.play('dust', { position: e.g.position.clone(), direction: away }); }
+}
+function area(at, r, dmg) { for (const e of alive()) if (e.g.position.distanceTo(at) < r) damage(e, dmg, at); }
+const impact = (trauma, freeze) => { if ($('shake').checked) shake.add(trauma); if ($('hitstop').checked) stop.trigger(freeze); };
+
+// ---------- skills ----------
+function cast(key) {
+  if (cds[key] > 0) return;
+  cds[key] = CD[key];
+  const d = face(), p = hero.g.position.clone();
+  if (key === 'j') {   // swing: alternate fore- and back-hand by rolling the same effect 180°
+    swingFlip = !swingFlip;
+    vfx.play('slash', { position: chest(hero.g), direction: d, roll: swingFlip ? 180 : 0 });
+    after(0.08, () => {
+      let hit = false;
+      for (const e of alive()) { const v = e.g.position.clone().sub(hero.g.position).setY(0); if (v.length() < 2.8 && v.normalize().dot(fwd()) > 0.2) { damage(e, 1, hero.g.position); hit = true; } }
+      if (hit) impact(0.22, 0.06);
+    });
+  } else if (key === 'e') {   // thunder: strike, then the ground impact 0.12 s later
+    const tgt = aim.clone().setY(0), off = tgt.clone().sub(p); if (off.length() > 10) tgt.copy(p).add(off.setLength(10));
+    vfx.play('thunder', { position: tgt, direction: d });
+    after(0.12, () => { vfx.play('thunderImpact', { position: tgt, direction: d }); impact(0.4, 0.05); area(tgt, 2.4, 3); });
+  } else if (key === 'f') {   // hammer lands 3 m ahead at 0.45 s
+    rooted = 0.7;
+    vfx.play('hammer', { position: p.clone().setY(0), direction: d });
+    const at = p.clone().add(d.clone().multiplyScalar(3)).setY(0);
+    after(RECIPES.hammer.impactAt, () => { impact(0.8, 0.09); area(at, 4.2, 8); });
+  } else if (key === 'shift') {
+    const mv = moveDir(), dir = mv.lengthSq() > 0 ? mv.normalize() : d;
+    dash = { dir, t: 0 };
+    vfx.play('dust', { position: p, direction: dir });
+  } else if (key === 'g') {
+    if (shieldFx) { shieldFx.stop(); shieldFx = null; } else shieldFx = vfx.play('shield', { parent: hero.g, position: [0, 0, 0] });
+  } else if (key === 'q') {
+    if (auraFx) { auraFx.stop(); auraFx = null; } else auraFx = vfx.play('aura', { parent: hero.g, position: [0, 0, 0] });
+  }
+}
+
+function setElement(next) {
+  element = next; vfx.element = next;
+  const ui = ELEMENTS[next].ui;
+  document.documentElement.style.setProperty('--el', ui);
+  aimMark.material.color.set(ui);
+  document.querySelectorAll('#els button').forEach((b) => b.setAttribute('aria-pressed', String(b.dataset.e === next)));
+}
+
+function preview(name) {   // play any recipe from the hero with its natural placement (no cooldowns, no damage)
+  const d = face(), p = hero.g.position.clone(), place = RECIPES[name].place;
+  if (place === 'attach') { const fx = vfx.play(name, { parent: hero.g, position: [0, 0, 0] }); after(2.5, () => fx.stop()); return; }
+  const pos = place === 'chest' ? chest(hero.g) : place === 'target' ? p.clone().addScaledVector(d, 2).setY(1.1) : place === 'ground' ? p.clone().addScaledVector(d, 4).setY(0) : p.clone().setY(0);
+  vfx.play(name, { position: pos, direction: d });
+  if (name === 'thunder') after(0.12, () => vfx.play('thunderImpact', { position: pos, direction: d }));
+}
+
+// ---------- input ----------
+const moveDir = () => new THREE.Vector3(
+  (keys.has('d') || keys.has('arrowright') ? 1 : 0) - (keys.has('a') || keys.has('arrowleft') ? 1 : 0), 0,
+  (keys.has('s') || keys.has('arrowdown') ? 1 : 0) - (keys.has('w') || keys.has('arrowup') ? 1 : 0));
+addEventListener('keydown', (ev) => {
+  const k = ev.key.toLowerCase();
+  if (['j', 'e', 'f', 'shift', 'g', 'q'].includes(k)) { cast(k); ev.preventDefault(); }
+  else if (k === ' ') { cast('shift'); ev.preventDefault(); }
+  else if (k >= '1' && k <= '6') setElement(ELEMENT_NAMES[+k - 1]);
+  keys.add(k);
+});
+addEventListener('keyup', (ev) => keys.delete(ev.key.toLowerCase()));
+addEventListener('blur', () => keys.clear());
+canvas.addEventListener('pointermove', (ev) => mouse.set(ev.clientX / innerWidth * 2 - 1, -(ev.clientY / innerHeight) * 2 + 1));
+canvas.addEventListener('pointerdown', (ev) => { if (ev.button === 0) cast('j'); else if (ev.button === 2) cast('e'); });
+canvas.addEventListener('contextmenu', (ev) => ev.preventDefault());
+let zoom = 1;
+canvas.addEventListener('wheel', (ev) => { zoom = THREE.MathUtils.clamp(zoom * (ev.deltaY > 0 ? 1.1 : 0.9), 0.35, 1.6); }, { passive: true });
+
+$('els').innerHTML = ELEMENT_NAMES.map((e, i) => `<button data-e="${e}" aria-pressed="${e === element}"><i style="background:${ELEMENTS[e].ui}"></i>${cap(e)}</button>`).join('');
+$('els').onclick = (ev) => { const b = ev.target.closest('[data-e]'); if (b) setElement(b.dataset.e); };
+$('fxs').innerHTML = RECIPE_NAMES.map((n) => `<button data-fx="${n}">${n}</button>`).join('');
+$('fxs').onclick = (ev) => { const b = ev.target.closest('[data-fx]'); if (b) preview(b.dataset.fx); };
+$('tempo').oninput = (ev) => { tempo = +ev.target.value; };
+$('bloom').onchange = (ev) => { post.bloom.enabled = ev.target.checked; };
+$('enemies').onchange = (ev) => { if (!ev.target.checked) { for (const e of enemies) scene.remove(e.g); enemies.length = 0; } };
+setElement('fire');
+spawnWave();
+
+// ---------- loop ----------
+const clock = new THREE.Clock();
+const camOff = new THREE.Vector3(0, 15, 10.5), camPos = camOff.clone(), tmp = new THREE.Vector3();
+function tick(force) {
+  const real = force ?? Math.min(clock.getDelta(), 0.05);
+  const dt = stop.scale(real * tempo);   // hit-stop freezes gameplay and VFX together
+  time += dt;
+  ray.setFromCamera(mouse, camera); if (ray.ray.intersectPlane(ground, tmp)) aim.copy(tmp);
+  aimMark.position.set(aim.x, 0.02, aim.z);
+
+  for (const t of timers) if (time >= t.at) { t.fn(); t.done = true; }
+  for (let i = timers.length - 1; i >= 0; i--) if (timers[i].done) timers.splice(i, 1);
+  for (const k in cds) cds[k] = Math.max(0, cds[k] - dt);
+  if (keys.has('j')) cast('j');
+  rooted = Math.max(0, rooted - dt);
+  if (dash) { dash.t += dt; hero.g.position.addScaledVector(dash.dir, dt * 22); if (dash.t > 0.17) dash = null; }
+  else if (!rooted) { const mv = moveDir(); if (mv.lengthSq() > 0) hero.g.position.addScaledVector(mv.normalize(), dt * 6.2); }
+  const pl = Math.hypot(hero.g.position.x, hero.g.position.z); if (pl > ARENA - 0.5) hero.g.position.multiplyScalar((ARENA - 0.5) / pl);
+  face();
+
+  let touching = 0;
+  for (const e of enemies) {
+    e.flash.update(dt);
+    if (e.dead) { const u = (time - e.dead) / 0.45; e.g.scale.setScalar(Math.max(0.001, 1 - u)); e.g.position.y = -u * 0.6; continue; }
+    const to = hero.g.position.clone().sub(e.g.position).setY(0), l = to.length();
+    if (l > 0.85) e.g.position.addScaledVector(to.normalize(), e.speed * dt); else touching++;
+    e.g.position.addScaledVector(e.kb, dt); e.kb.multiplyScalar(Math.exp(-dt * 8));   // knockback decays fast
+    e.g.rotation.y = Math.atan2(to.x, to.z);
+    for (const o of enemies) if (o !== e && !o.dead) { const v = e.g.position.clone().sub(o.g.position).setY(0), dd = v.length(); if (dd < 0.7 && dd > 1e-4) e.g.position.addScaledVector(v.normalize(), (0.7 - dd) * 0.5); }
+  }
+  for (let i = enemies.length - 1; i >= 0; i--) if (enemies[i].dead && time - enemies[i].dead > 0.5) { scene.remove(enemies[i].g); enemies.splice(i, 1); }
+  $('left').textContent = alive().length;
+  if (touching && !shieldFx) hp -= touching * 9 * dt;
+  hp = Math.max(0, hp); $('hp').style.width = hp + '%';
+  if (hp <= 0) { banner('Down! Restarting'); hp = 100; for (const e of enemies) scene.remove(e.g); enemies.length = 0; wave = 0; score = 0; $('score').textContent = 0; }
+  if (!enemies.length && $('enemies').checked) {
+    hp = Math.min(100, hp + 25);
+    const a = vfx.play('aura', { parent: hero.g, position: [0, 0, 0] }); setTimeout(() => a.stop(), 1500);
+    spawnWave();
+  }
+
+  camPos.lerp(tmp.copy(hero.g.position).addScaledVector(camOff, zoom), 1 - Math.exp(-real * 6));
+  camera.position.copy(camPos).add(shake.update(real));
+  camera.lookAt(hero.g.position.x, 0.8, hero.g.position.z);
+  camera.rotateZ(shake.roll);
+  vfx.update(dt);
+  post.render();
+}
+renderer.setAnimationLoop(() => tick());
+window.__demo = { vfx, cast, preview, setElement, hero, setZoom: (z) => { zoom = z; camPos.copy(hero.g.position).addScaledVector(camOff, z); }, tick: (n = 1, dt = 1 / 60) => { for (let k = 0; k < n; k++) tick(dt); }, stopLoop: () => renderer.setAnimationLoop(null), clearEnemies: () => { $('enemies').checked = false; $('enemies').onchange({ target: $('enemies') }); } };
+</script>
+</body>
+</html>
